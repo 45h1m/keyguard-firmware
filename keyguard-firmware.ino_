@@ -23,7 +23,7 @@
 const char* ssid = "SSID";          // REPLACE WITH YOUR WIFI SSID
 const char* password = "okokokok";  // REPLACE WITH YOUR WIFI PASSWORD
 
-String serverName = "192.168.118.186";   // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
+String serverName = "192.168.235.186";   // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
 
 String serverPath = "/upload";     // The path on the server to handle the upload
 
@@ -52,7 +52,7 @@ WiFiClient client; // Changed from WiFiClientSecure
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-const int timerInterval = 10000;    // time between each HTTP POST image (milliseconds)
+const int timerInterval = 30000;    // time between each HTTP POST image (milliseconds)
 unsigned long previousMillis = 0;   // last time image was sent
 
 void setup() {

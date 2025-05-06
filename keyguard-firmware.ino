@@ -15,53 +15,53 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClient.h>  // Changed from WiFiClientSecure
+#include <WiFiClient.h> // Changed from WiFiClientSecure
 #include "soc/soc.h"
 #include "soc/rtc_cntl_reg.h"
 #include "esp_camera.h"
 #include <ArduinoJson.h>
 
+const size_t JSON_DOC_SIZE = 1024;
+
 const char* ssid = "SSID";          // REPLACE WITH YOUR WIFI SSID
 const char* password = "okokokok";  // REPLACE WITH YOUR WIFI PASSWORD
 
-String serverName = "192.168.118.186";  // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
+String serverName = "192.168.235.186";   // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
 
-String serverPath = "/upload";  // The path on the server to handle the upload
+String serverPath = "/upload";     // The path on the server to handle the upload
 
 // IMPORTANT: Ensure your server is listening for HTTP (not HTTPS) on this port.
 // Standard HTTP port is 80.
-const int serverPort = 3000;  // Server port for HTTP connection
+const int serverPort = 3000; // Server port for HTTP connection
 
-WiFiClient client;  // Changed from WiFiClientSecure
+WiFiClient client; // Changed from WiFiClientSecure
 
 // CAMERA_MODEL_AI_THINKER PINS
-#define PWDN_GPIO_NUM 32
-#define RESET_GPIO_NUM -1
-#define XCLK_GPIO_NUM 0
-#define SIOD_GPIO_NUM 26
-#define SIOC_GPIO_NUM 27
+#define PWDN_GPIO_NUM     32
+#define RESET_GPIO_NUM    -1
+#define XCLK_GPIO_NUM      0
+#define SIOD_GPIO_NUM     26
+#define SIOC_GPIO_NUM     27
 
-#define Y9_GPIO_NUM 35
-#define Y8_GPIO_NUM 34
-#define Y7_GPIO_NUM 39
-#define Y6_GPIO_NUM 36
-#define Y5_GPIO_NUM 21
-#define Y4_GPIO_NUM 19
-#define Y3_GPIO_NUM 18
-#define Y2_GPIO_NUM 5
-#define VSYNC_GPIO_NUM 25
-#define HREF_GPIO_NUM 23
-#define PCLK_GPIO_NUM 22
+#define Y9_GPIO_NUM       35
+#define Y8_GPIO_NUM       34
+#define Y7_GPIO_NUM       39
+#define Y6_GPIO_NUM       36
+#define Y5_GPIO_NUM       21
+#define Y4_GPIO_NUM       19
+#define Y3_GPIO_NUM       18
+#define Y2_GPIO_NUM        5
+#define VSYNC_GPIO_NUM    25
+#define HREF_GPIO_NUM     23
+#define PCLK_GPIO_NUM     22
 
-const int timerInterval = 10000;   // time between each HTTP POST image (milliseconds)
-unsigned long previousMillis = 0;  // last time image was sent
-
-#define LOCK_PIN_1 
+const int timerInterval = 30000;    // time between each HTTP POST image (milliseconds)
+unsigned long previousMillis = 0;   // last time image was sent
 
 void setup() {
   Serial.begin(115200);
   Serial.print("ESP32 Cam - HTTP POST Example\n");
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // disable brownout detector
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0); // disable brownout detector
 
   WiFi.mode(WIFI_STA);
   Serial.println();
@@ -100,10 +100,10 @@ void setup() {
   config.pixel_format = PIXFORMAT_JPEG;
 
   // init with high specs to pre-allocate larger buffers
-  if (psramFound()) {
-    config.frame_size = FRAMESIZE_SVGA;  // Or FRAMESIZE_UXGA for higher resolution if needed
-    config.jpeg_quality = 10;            //0-63 lower number means higher quality
-    config.fb_count = 2;                 // Use 2 frame buffers in PSRAM
+  if(psramFound()){
+    config.frame_size = FRAMESIZE_SVGA; // Or FRAMESIZE_UXGA for higher resolution if needed
+    config.jpeg_quality = 10;  //0-63 lower number means higher quality
+    config.fb_count = 2;       // Use 2 frame buffers in PSRAM
   } else {
     config.frame_size = FRAMESIZE_CIF;
     config.jpeg_quality = 12;
@@ -122,152 +122,32 @@ void setup() {
 
   // Send the first photo immediately
   sendPhoto();
-  previousMillis = millis();  // Set the timer baseline after the first send
+  previousMillis = millis(); // Set the timer baseline after the first send
 }
 
 void loop() {
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= timerInterval) {
-    sendPhoto();
+    String serverResponse = sendPhoto();
+
+    handleServerResponse(serverResponse);
     previousMillis = currentMillis;
   }
 }
 
-// JSON response handling function
-bool handleFaceRecognitionResponse(String jsonResponse) {
-  // Check if response is empty or indicates an error
-  if (jsonResponse.length() == 0 || jsonResponse == "Server Response Timeout" || jsonResponse.startsWith("Connection to")) {
-    Serial.println("Error in server response: " + jsonResponse);
-    return false;
-  }
-
-  // Find the JSON content in the response (skipping HTTP headers if present)
-  int jsonStart = jsonResponse.indexOf('{');
-  if (jsonStart == -1) {
-    Serial.println("No valid JSON found in response");
-    return false;
-  }
-
-  String jsonContent = jsonResponse.substring(jsonStart);
-
-  // Parse the JSON response
-  StaticJsonDocument<1024> doc;  // Adjust size based on your expected response size
-  DeserializationError error = deserializeJson(doc, jsonContent);
-
-  if (error) {
-    Serial.print("JSON parsing failed: ");
-    Serial.println(error.c_str());
-    return false;
-  }
-
-  // Process the recognition result
-  const char* status = doc["status"];
-  const char* recognitionResult = doc["recognition_result"];
-  const char* message = doc["message"];
-
-  Serial.print("Status: ");
-  Serial.println(status);
-  Serial.print("Recognition result: ");
-  Serial.println(recognitionResult);
-  Serial.print("Message: ");
-  Serial.println(message);
-
-  // Check if we have a successful recognition with unlock permission
-  if (strcmp(recognitionResult, "identified") == 0) {
-    // Get person information
-    const char* personName = doc["person"]["name"];
-    int accessLevel = doc["person"]["access_level"];
-
-    Serial.print("Access granted for: ");
-    Serial.println(personName);
-    Serial.print("Access level: ");
-    Serial.println(accessLevel);
-
-    // Process unlock actions
-    JsonArray actions = doc["actions"];
-    for (JsonVariant action : actions) {
-      const char* lockId = action["lock_id"];
-      const char* actionType = action["action"];
-      int duration = action["duration"];
-
-      Serial.print("Performing action on lock: ");
-      Serial.println(lockId);
-
-      if (strcmp(actionType, "unlock") == 0) {
-        // Trigger the solenoid unlock function
-        unlockSolenoid(lockId, duration);
-      }
-    }
-
-    return true;
-  } else if (strcmp(recognitionResult, "unrecognized") == 0) {
-    Serial.println("Face not recognized");
-    // Handle unrecognized face (maybe flash LED, etc.)
-    return false;
-  } else if (strcmp(recognitionResult, "no_permission") == 0) {
-    Serial.println("Person recognized but has no access permission");
-    // Handle unauthorized access attempt
-    return false;
-  }
-
-  return false;
-}
-
-// Function to unlock a specific solenoid
-void unlockSolenoid(const char* lockId, int duration) {
-  // Map lock IDs to actual GPIO pins or addresses
-  int pinNumber = -1;
-
-  // Example of mapping lock IDs to pins
-  if (strcmp(lockId, "lock_001") == 0) {
-    pinNumber = 12;  // GPIO12 for example
-  } else if (strcmp(lockId, "lock_002") == 0) {
-    pinNumber = 13;  // GPIO13 for example
-  } else if (strcmp(lockId, "lock_003") == 0) {
-    pinNumber = 14;  // GPIO14 for example
-  } else if (strcmp(lockId, "lock_004") == 0) {
-    pinNumber = 2;  // GPIO14 for example
-  }
-
-  if (pinNumber != -1) {
-    Serial.print("Unlocking solenoid on pin ");
-    Serial.print(pinNumber);
-    Serial.print(" for ");
-    Serial.print(duration);
-    Serial.println(" seconds");
-
-    // Activate the solenoid
-    digitalWrite(pinNumber, HIGH);
-
-    // Create a task to lock it again after the specified duration
-    // Note: In a real implementation, you might want to use a timer or another approach
-    // Here's a simple delay-based approach
-    delay(duration * 1000);
-    digitalWrite(pinNumber, LOW);
-
-    Serial.print("Lock ");
-    Serial.print(lockId);
-    Serial.println(" secured again");
-  } else {
-    Serial.print("Unknown lock ID: ");
-    Serial.println(lockId);
-  }
-}
-
-// Modified sendPhoto function to use the JSON response handler
 String sendPhoto() {
   String getAll;
   String getBody;
 
   Serial.println("Taking picture...");
-  camera_fb_t* fb = NULL;
+  camera_fb_t * fb = NULL;
   fb = esp_camera_fb_get();
-  if (!fb) {
+  if(!fb) {
     Serial.println("Camera capture failed");
     // Optional: Try to re-initialize or restart
     delay(1000);
     ESP.restart();
-    return "Camera capture failed";  // Return error string
+    return "Camera capture failed"; // Return error string
   }
   Serial.printf("Picture taken! Size: %u bytes\n", fb->len);
 
@@ -285,24 +165,25 @@ String sendPhoto() {
 
     // Send HTTP POST request header
     client.println("POST " + serverPath + " HTTP/1.1");
-    client.println("Host: " + serverName + ":" + String(serverPort));  // Include port in Host header if non-standard
+    client.println("Host: " + serverName + ":" + String(serverPort)); // Include port in Host header if non-standard
     client.println("Content-Length: " + String(totalLen));
     client.println("Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
-    client.println("Connection: close");  // Advise server to close connection after response
-    client.println();                     // End of headers
+    client.println("Connection: close"); // Advise server to close connection after response
+    client.println(); // End of headers
 
     // Send multipart boundary and headers for the image file
     client.print(head);
 
     // Send image data in chunks
-    uint8_t* fbBuf = fb->buf;
+    uint8_t *fbBuf = fb->buf;
     size_t fbLen = fb->len;
-    size_t chunksize = 1024;  // Send in 1KB chunks
+    size_t chunksize = 1024; // Send in 1KB chunks
     for (size_t n = 0; n < fbLen; n = n + chunksize) {
       if (n + chunksize < fbLen) {
         client.write(fbBuf, chunksize);
         fbBuf += chunksize;
-      } else if (fbLen % chunksize > 0) {
+      }
+      else if (fbLen % chunksize > 0) {
         size_t remainder = fbLen % chunksize;
         client.write(fbBuf, remainder);
       }
@@ -312,73 +193,147 @@ String sendPhoto() {
 
     // Return the frame buffer to be reused
     esp_camera_fb_return(fb);
-    fb = NULL;  // Make sure we don't return it again if something goes wrong below
+    fb = NULL; // Make sure we don't return it again if something goes wrong below
 
     Serial.println("Image data sent. Waiting for server response...");
 
     // Read the response from the server
-    int timoutTimer = 10000;  // 10 seconds timeout
+    int timoutTimer = 10000; // 10 seconds timeout
     long startTimer = millis();
-    boolean state = false;  // Flag to indicate if we are reading the body
+    boolean state = false; // Flag to indicate if we are reading the body
 
     while ((startTimer + timoutTimer) > millis()) {
+      // Serial.print("."); // Optional: print dots while waiting
+      // delay(100); // Be careful with delays inside loops like this
 
       while (client.available()) {
         char c = client.read();
+         //Serial.print(c); // Uncomment for debugging full response
 
         // Simple logic to capture the response body after the first empty line
         if (c == '\n') {
-          if (getAll.length() == 0) {  // Indicates end of headers (blank line)
-            state = true;
+          if (getAll.length() == 0) { // Indicates end of headers (blank line)
+             state = true;
           }
-          getAll = "";  // Reset line buffer
-        } else if (c != '\r') {
-          getAll += String(c);  // Build the current line
+          getAll = ""; // Reset line buffer
+        }
+        else if (c != '\r') {
+          getAll += String(c); // Build the current line
         }
 
-        if (state == true) {  // If we are in the body part
+        if (state == true) { // If we are in the body part
           getBody += String(c);
         }
-        startTimer = millis();  // Reset timeout timer with every byte received
+        startTimer = millis(); // Reset timeout timer with every byte received
       }
       if (getBody.length() > 0) {
-        // Check if client is still connected, break if not
-        if (!client.connected() && !client.available()) {
-          break;
-        }
+          // Check if client is still connected, break if not
+          if (!client.connected() && !client.available()){
+              break;
+          }
       }
-      // Add small delay to prevent tight loop hogging CPU if client.available() is false
-      delay(1);
+       // Add small delay to prevent tight loop hogging CPU if client.available() is false
+       delay(1);
     }
+    Serial.println(); // Newline after waiting dots or response printing
 
     if (getBody.length() > 0) {
       Serial.println("Server Response Body:");
       Serial.println(getBody);
-
-      // Process the JSON response
-      bool accessGranted = handleFaceRecognitionResponse(getBody);
-
-      if (accessGranted) {
-        Serial.println("Access granted - door unlocked");
-      } else {
-        Serial.println("Access denied");
-        // Optional: Flash LED, sound buzzer, etc.
-      }
-
     } else {
       Serial.println("No response body received or timeout.");
       getBody = "Server Response Timeout";
     }
 
-    client.stop();  // Close the connection
+    client.stop(); // Close the connection
     Serial.println("Connection closed.");
-  } else {
+  }
+  else {
     getBody = "Connection to " + serverName + " failed.";
     Serial.println(getBody);
-    if (fb) {  // Make sure to return buffer even if connection failed after capture
-      esp_camera_fb_return(fb);
-      fb = NULL;
+    if (fb) { // Make sure to return buffer even if connection failed after capture
+        esp_camera_fb_return(fb);
+        fb = NULL;
     }
   }
   return getBody;
+}
+
+void handleServerResponse(String responseBody) {
+  Serial.println("\n--- Handling Server Response ---");
+  // First, check if the response body indicates an error from sendPhoto itself
+  if (responseBody.startsWith("Error:")) {
+      Serial.println("Received error message from sendPhoto function:");
+      Serial.println(responseBody);
+      Serial.println("--- End Handling ---");
+      return; // Don't attempt to parse if it's a known error string
+  }
+
+  // If it's not a known error, assume it might be JSON and try parsing
+  Serial.println("Attempting to parse JSON response...");
+
+  StaticJsonDocument<JSON_DOC_SIZE> doc;
+  DeserializationError error = deserializeJson(doc, responseBody);
+
+  if (error) {
+    Serial.print(F("deserializeJson() failed: "));
+    Serial.println(error.c_str());
+    Serial.println("Raw response was:");
+    Serial.println(responseBody); // Print the body that failed parsing
+    Serial.println("--- End Handling ---");
+    return; // Exit if parsing failed
+  }
+
+  // --- JSON Parsing Successful ---
+  Serial.println("JSON Parsing Successful!");
+
+  // Extract data - use .isNull() or default values for safety
+  bool success = doc["success"] | false;
+  const char* recognition_result = doc["recognition_result"] | "unknown";
+  const char* message = doc["message"] | "";
+  const char* timestamp = doc["timestamp"] | "";
+
+  Serial.printf("Success: %s\n", success ? "true" : "false");
+  Serial.printf("Recognition Result: %s\n", recognition_result);
+  Serial.printf("Message: %s\n", message);
+  Serial.printf("Timestamp: %s\n", timestamp);
+
+  // Extract nested 'person' object
+  if (doc.containsKey("person") && !doc["person"].isNull()) {
+      JsonObject person = doc["person"];
+      const char* person_id = person["id"] | "N/A";
+      const char* person_name = person["name"] | "N/A";
+      int access_level = person["access_level"] | -1;
+
+      Serial.println("Person Details:");
+      Serial.printf("  ID: %s\n", person_id);
+      Serial.printf("  Name: %s\n", person_name);
+      Serial.printf("  Access Level: %d\n", access_level);
+  } else {
+       Serial.println("Person details not found in response.");
+  }
+
+  // Extract 'actions' array
+  if (doc.containsKey("actions") && doc["actions"].is<JsonArray>()) { // Check it's an array
+      JsonArray actions = doc["actions"].as<JsonArray>();
+      if (!actions.isNull() && actions.size() > 0) { // Check not null and not empty
+           Serial.println("Actions:");
+           for(JsonObject action_item : actions) {
+              const char* lock_id = action_item["lock_id"] | "N/A";
+              const char* action_cmd = action_item["action"] | "N/A";
+              int duration = action_item["duration"] | 0;
+
+              Serial.printf("  Lock ID: %s, Action: %s, Duration: %d\n", lock_id, action_cmd, duration);
+
+              // *** Call your function to handle the action ***
+              // Example: handleLockAction(lock_id, action_cmd, duration);
+           }
+      } else {
+           Serial.println("Actions array is present but empty or null.");
+      }
+  } else {
+      Serial.println("Actions array not found or not an array in response.");
+  }
+
+  Serial.println("--- End Handling ---");
 }

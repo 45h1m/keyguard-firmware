@@ -17,7 +17,7 @@ const char* ssid = "SSID";          // REPLACE WITH YOUR WIFI SSID
 const char* password = "okokokok";  // REPLACE WITH YOUR WIFI PASSWORD
 
 // ===== SERVER CONFIGURATION =====
-String serverName = "192.168.118.186";  // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
+String serverName = "192.168.235.186";  // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
 String serverPath = "/upload";          // The path on the server to handle the upload
 const int serverPort = 3000;            // Server port for HTTP connection
 WiFiClient client;                      // HTTP client connection
