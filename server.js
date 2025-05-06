@@ -13,7 +13,7 @@ const response = {
     message: "Access granted for John Doe",
     actions: [
         {
-            lock_id: "lock_003",
+            lock_id: "lock_002",
             action: "unlock",
             duration: 5, // seconds to keep unlocked
         },
