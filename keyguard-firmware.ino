@@ -62,6 +62,7 @@ unsigned long previousMillis = 0;  // last time image was sent
 
 #define RELAY_PIN_1  12
 #define RELAY_PIN_2  14
+#define RELAY_PIN_3  15
 // #define RELAY_PIN_3  16
 
 void setup() {
@@ -73,11 +74,11 @@ void setup() {
 
   pinMode(RELAY_PIN_1, OUTPUT);
   pinMode(RELAY_PIN_2, OUTPUT);
-  // pinMode(RELAY_PIN_3, OUTPUT);
+  pinMode(RELAY_PIN_3, OUTPUT);
 
   digitalWrite(RELAY_PIN_1, HIGH); // Relay OFF
   digitalWrite(RELAY_PIN_2, HIGH); // Relay OFF
-  // digitalWrite(RELAY_PIN_3, HIGH); // Relay OFF
+  digitalWrite(RELAY_PIN_3, HIGH); // Relay OFF
 
   WiFi.mode(WIFI_STA);
   Serial.println();
@@ -139,12 +140,22 @@ void setup() {
   // Send the first photo immediately
   // sendPhoto();
   previousMillis = millis();  // Set the timer baseline after the first send
+
+  pinMode(4, OUTPUT);
+
+  digitalWrite(4, HIGH);
+  delay(500);
+  digitalWrite(4, LOW);
 }
 
 void loop() {
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillis >= timerInterval && !digitalRead(IR_SENSOR_PIN)) {
+    digitalWrite(4, HIGH);
+    delay(100);
     String serverResponse = sendPhoto();
+    delay(100);
+    digitalWrite(4, LOW);
 
     handleServerResponse(serverResponse);
     previousMillis = currentMillis;
@@ -366,7 +377,7 @@ void unlock(const char* lock_id) {
   }
   else if (strcmp(lock_id, "lock_003") == 0) {
     Serial.println("  -> Action unlocking: (ID: lock_003)");
-    // digitalWrite(RELAY_PIN_3, LOW);
+    digitalWrite(RELAY_PIN_3, LOW);
   }
   else if (strcmp(lock_id, "lock_004") == 0) {
     Serial.println("  -> Action unlocking: (ID: lock_004)");
@@ -378,7 +389,7 @@ void unlock(const char* lock_id) {
   
   digitalWrite(RELAY_PIN_1, HIGH); // Relay OFF
   digitalWrite(RELAY_PIN_2, HIGH); // Relay OFF
-  // digitalWrite(RELAY_PIN_3, HIGH); // Relay OFF
+  digitalWrite(RELAY_PIN_3, HIGH); // Relay OFF
   
   Serial.println("  -> Locked again");
   delay(100);

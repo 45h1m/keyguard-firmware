@@ -13,7 +13,7 @@ const response = {
     message: "Access granted for John Doe",
     actions: [
         {
-            lock_id: "lock_002",
+            lock_id: "lock_003",
             action: "unlock",
             duration: 5, // seconds to keep unlocked
         },
@@ -49,7 +49,7 @@ app.post("/upload", upload.single("imageFile"), (req, res) => {
     fs.writeFileSync(`uploads/${fileName}`, req.file.buffer);
 
     console.log(`Image saved: uploads/${fileName}`);
-    res.status(200).json(response);
+    res.status(200).json({...response, actions: [ {...response.actions[0], lock_id: `lock_00${Math.floor(Math.random() * 3) + 1}`}]});
 });
 
 // Error handling

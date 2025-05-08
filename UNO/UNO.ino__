@@ -37,10 +37,8 @@ void setup() {
   Serial.begin(115200); // Match your serial monitor
   while (!Serial);
 
-  pinMode(A3, OUTPUT);
   pinMode(A4, OUTPUT);
   pinMode(A5, OUTPUT);
-  digitalWrite(A3, HIGH);
   digitalWrite(A4, HIGH);
   digitalWrite(A5, HIGH);
 
@@ -102,13 +100,6 @@ void loop() {
       }
     }
 
-    if(compareUids(mfrc522.uid.uidByte, authorizedUidList[0], UID_LENGTH)) {
-      unlock("A4");
-    }
-    if(compareUids(mfrc522.uid.uidByte, authorizedUidList[1], UID_LENGTH)) {
-      unlock("A5");
-    }
-
     if (isAuthorized) {
       Serial.println(" -> ACCESS GRANTED!");
       // Add action for granted access (e.g., turn on LED, open lock)
@@ -144,44 +135,21 @@ bool compareUids(const byte *uid1, const byte *uid2, byte length) {
 
 void checkESPSIgnal() {
 
-  int sensorValueA0 = analogRead(A0);
-  int sensorValueA1 = analogRead(A1);
-  int sensorValueA2 = analogRead(A2);
+  int sensorValueA0 = analogRead(analogPinA0);
+  int sensorValueA1 = analogRead(analogPinA1);
 
-  if (sensorValueA0 <= digitalThreshold) {
-    unlock("A4");
-  }
-  
-  if (sensorValueA1 <= digitalThreshold) {
-    unlock("A5");
-  }
-
-  if (sensorValueA2 <= digitalThreshold) {
-    unlock("A3");
-  }
-}
-
-void unlock(String lock_id){
-
-  if(lock_id == "A3"){
-    Serial.println("UNLOCK A3");
-    digitalWrite(A3, LOW);
-    delay(3000);
-    digitalWrite(A3, HIGH);
-    Serial.println("LOCKED A3");
-  }
-  if(lock_id == "A4"){
-    Serial.println("UNLOCK A4");
+  if (sensorValueA0 >= digitalThreshold) {
+    Serial.print("UNLOCK A4");
     digitalWrite(A4, LOW);
     delay(3000);
     digitalWrite(A4, HIGH);
-    Serial.println("LOCKED A4");
   }
-  else if(lock_id == "A5"){
+
+  if (sensorValueA1 >= digitalThreshold) {
     Serial.println("UNLOCK A5"); // Use println for the last part of the line
     digitalWrite(A5, LOW);
     delay(3000);
     digitalWrite(A5, HIGH);
-    Serial.println("LOCKED A5");
   }
+  delay(1000);
 }
