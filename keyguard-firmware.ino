@@ -11,6 +11,8 @@
   copies or substantial portions of the Software.
 
   *** MODIFIED FOR HTTP INSTEAD OF HTTPS ***
+  *** MODIFIED TO ADD WS2811 LED STATUS VIA FASTLED ***
+  *** MODIFIED TO ADD "READY" LED INDICATION ***
 */
 
 #include <Arduino.h>
@@ -20,21 +22,28 @@
 #include "soc/rtc_cntl_reg.h"
 #include "esp_camera.h"
 #include <ArduinoJson.h>
+#include <FastLED.h>     // Added for WS2811 LED control
+
+// --- FastLED definitions ---
+#define LED_PIN 2        // GPIO pin for WS2811 data line (e.g., GPIO2)
+#define NUM_LEDS 1       // We have one WS2811 LED
+#define BRIGHTNESS 60    // Brightness 0-255
+CRGB leds[NUM_LEDS];     // Array to hold LED color data
+const CRGB READY_COLOR = CRGB::Aqua; // Color for "ready to take picture" state
+// --- End FastLED definitions ---
 
 const size_t JSON_DOC_SIZE = 1024;
 
 const char* ssid = "SSID";          // REPLACE WITH YOUR WIFI SSID
 const char* password = "okokokok";  // REPLACE WITH YOUR WIFI PASSWORD
 
-String serverName = "192.168.235.186";  // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
+String serverName = "192.168.96.186";  // REPLACE WITH YOUR SERVER IP OR DOMAIN NAME
 
 String serverPath = "/upload";  // The path on the server to handle the upload
 
-// IMPORTANT: Ensure your server is listening for HTTP (not HTTPS) on this port.
-// Standard HTTP port is 80.
 const int serverPort = 3000;  // Server port for HTTP connection
 
-WiFiClient client;  // Changed from WiFiClientSecure
+WiFiClient client;
 
 // CAMERA_MODEL_AI_THINKER PINS
 #define PWDN_GPIO_NUM 32
@@ -63,34 +72,78 @@ unsigned long previousMillis = 0;  // last time image was sent
 #define RELAY_PIN_1  12
 #define RELAY_PIN_2  14
 #define RELAY_PIN_3  15
-// #define RELAY_PIN_3  16
+
+// --- LED Helper Functions ---
+void led_set_color(CRGB color) {
+    leds[0] = color;
+    FastLED.show();
+}
+
+void led_off() {
+    leds[0] = CRGB::Black;
+    FastLED.show();
+}
+
+void led_show_status_temp(CRGB color, unsigned long duration_ms) {
+    // Ensure temporary status is shown at standard brightness
+    // (in case a future "ready" state uses pulsing brightness)
+    uint8_t currentGlobalBrightness = FastLED.getBrightness();
+    if (currentGlobalBrightness != BRIGHTNESS) FastLED.setBrightness(BRIGHTNESS);
+
+    led_set_color(color);
+    delay(duration_ms);
+    led_off(); // Turns LED off
+
+    // Restore previous brightness only if it was different,
+    // otherwise main loop will handle setting BRIGHTNESS for READY_COLOR
+    // For now, simpler to let the main loop always set READY_COLOR with BRIGHTNESS.
+    // if (currentGlobalBrightness != BRIGHTNESS) FastLED.setBrightness(currentGlobalBrightness);
+}
+// --- End LED Helper Functions ---
 
 void setup() {
   Serial.begin(115200);
-  Serial.print("ESP32 Cam - HTTP POST Example\n");
-  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);  // disable brownout detector
+  Serial.print("ESP32 Cam - HTTP POST Example with LED Status\n");
+  WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
+
+  FastLED.addLeds<WS2811, LED_PIN, GRB>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
+  FastLED.setBrightness(BRIGHTNESS);
+  led_off(); 
 
   pinMode(IR_SENSOR_PIN, INPUT);
-
   pinMode(RELAY_PIN_1, OUTPUT);
   pinMode(RELAY_PIN_2, OUTPUT);
   pinMode(RELAY_PIN_3, OUTPUT);
-
-  digitalWrite(RELAY_PIN_1, HIGH); // Relay OFF
-  digitalWrite(RELAY_PIN_2, HIGH); // Relay OFF
-  digitalWrite(RELAY_PIN_3, HIGH); // Relay OFF
+  digitalWrite(RELAY_PIN_1, HIGH);
+  digitalWrite(RELAY_PIN_2, HIGH);
+  digitalWrite(RELAY_PIN_3, HIGH);
 
   WiFi.mode(WIFI_STA);
   Serial.println();
   Serial.print("Connecting to WiFi: ");
   Serial.println(ssid);
+
+  unsigned long wifi_connect_start_time = millis();
+  bool wifi_led_state = false;
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     Serial.print(".");
-    delay(500);
+    leds[0] = wifi_led_state ? CRGB::Blue : CRGB::Black;
+    FastLED.show();
+    wifi_led_state = !wifi_led_state;
+    delay(250); 
+
+    if (millis() - wifi_connect_start_time > 30000) { 
+        Serial.println("\nWiFi Connection Timeout!");
+        while(true) { // Blink Red indefinitely
+            led_set_color(CRGB::Red); delay(500);
+            led_off(); delay(500);
+        }
+    }
   }
   Serial.println();
   Serial.print("WiFi connected!\n");
+  led_show_status_temp(CRGB::Green, 1500); 
   Serial.print("ESP32-CAM IP Address: ");
   Serial.println(WiFi.localIP());
 
@@ -116,49 +169,67 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // init with high specs to pre-allocate larger buffers
   if (psramFound()) {
-    config.frame_size = FRAMESIZE_SVGA;  // Or FRAMESIZE_UXGA for higher resolution if needed
-    config.jpeg_quality = 10;            //0-63 lower number means higher quality
-    config.fb_count = 2;                 // Use 2 frame buffers in PSRAM
+    config.frame_size = FRAMESIZE_SVGA;
+    config.jpeg_quality = 10;
+    config.fb_count = 2;
   } else {
     config.frame_size = FRAMESIZE_CIF;
     config.jpeg_quality = 12;
     config.fb_count = 1;
   }
 
-  // camera init
   esp_err_t err = esp_camera_init(&config);
   if (err != ESP_OK) {
     Serial.printf("Camera init failed with error 0x%x\n", err);
+    led_set_color(CRGB::Red); 
     Serial.println("Restarting...");
-    delay(1000);
+    delay(2000); 
     ESP.restart();
   }
   Serial.println("Camera initialized successfully.");
+  led_show_status_temp(CRGB::Green, 1000); 
 
-  // Send the first photo immediately
-  // sendPhoto();
-  previousMillis = millis();  // Set the timer baseline after the first send
+  pinMode(4, OUTPUT); 
+  digitalWrite(4, LOW); 
 
-  pinMode(4, OUTPUT);
-
-  digitalWrite(4, HIGH);
-  delay(500);
-  digitalWrite(4, LOW);
+  Serial.println("System setup complete. Entering ready state.");
+  led_set_color(READY_COLOR); // Set to ready state after setup completes
+  previousMillis = millis(); // Set the timer baseline
 }
 
 void loop() {
   unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis >= timerInterval && !digitalRead(IR_SENSOR_PIN)) {
-    digitalWrite(4, HIGH);
-    delay(100);
-    String serverResponse = sendPhoto();
-    delay(100);
-    digitalWrite(4, LOW);
 
-    handleServerResponse(serverResponse);
-    previousMillis = currentMillis;
+  // Condition to take a photo: timerInterval has passed AND IR sensor is active (LOW)
+  if (currentMillis - previousMillis >= timerInterval && !digitalRead(IR_SENSOR_PIN)) {
+    // --- Active processing starts ---
+    FastLED.setBrightness(BRIGHTNESS); // Ensure standard brightness for active states
+    led_set_color(CRGB::DeepPink);     // Indicate IR trigger / process start
+
+    digitalWrite(4, HIGH); // Turn on onboard flash LED
+    delay(100);            // Allow flash to stabilize before capture
+
+    String serverResponse = sendPhoto(); // This function manages its own LED states during execution
+
+    delay(100);            // Original delay from user code
+    digitalWrite(4, LOW);  // Turn off onboard flash LED (before handleServerResponse, as in original)
+
+    handleServerResponse(serverResponse); // This function manages its own LED states
+
+    previousMillis = currentMillis;    // Reset the timer
+    Serial.println("Processing complete. Returning to ready state.");
+    led_set_color(READY_COLOR);        // Return to ready state indication
+  } else {
+    // --- Idle / Ready state ---
+    // Set to READY_COLOR if not already, and ensure brightness is standard
+    // This handles returning to ready after a temporary status from led_show_status_temp might have turned LED off.
+    if (leds[0] != READY_COLOR || FastLED.getBrightness() != BRIGHTNESS) {
+        FastLED.setBrightness(BRIGHTNESS);
+        led_set_color(READY_COLOR);
+    }
+    // Optional small delay if loop runs too fast in idle, but usually not necessary with millis-based timing
+    // delay(10); 
   }
 }
 
@@ -167,21 +238,27 @@ String sendPhoto() {
   String getBody;
 
   Serial.println("Taking picture...");
+  FastLED.setBrightness(BRIGHTNESS); // Ensure brightness for this status
+  led_set_color(CRGB::Cyan); // LED Cyan: Taking picture
+
   camera_fb_t* fb = NULL;
   fb = esp_camera_fb_get();
   if (!fb) {
     Serial.println("Camera capture failed");
-    // Optional: Try to re-initialize or restart
-    delay(1000);
-    ESP.restart();
-    return "Camera capture failed";  // Return error string
+    led_show_status_temp(CRGB::Red, 2000); // Red for 2s, then off (main loop will restore READY_COLOR or restart)
+    delay(1000); 
+    ESP.restart(); 
+    return "Error: Camera capture failed"; // Should be unreachable due to restart
   }
   Serial.printf("Picture taken! Size: %u bytes\n", fb->len);
 
   Serial.println("Connecting to server: " + serverName + ":" + String(serverPort));
+  FastLED.setBrightness(BRIGHTNESS);
+  led_set_color(CRGB::Yellow); 
 
-  // Connect using HTTP client
   if (client.connect(serverName.c_str(), serverPort)) {
+    FastLED.setBrightness(BRIGHTNESS);
+    led_set_color(CRGB::LimeGreen); 
     Serial.println("Connection successful!");
     String head = "--RandomNerdTutorials\r\nContent-Disposition: form-data; name=\"imageFile\"; filename=\"esp32-cam.jpg\"\r\nContent-Type: image/jpeg\r\n\r\n";
     String tail = "\r\n--RandomNerdTutorials--\r\n";
@@ -190,21 +267,21 @@ String sendPhoto() {
     uint32_t extraLen = head.length() + tail.length();
     uint32_t totalLen = imageLen + extraLen;
 
-    // Send HTTP POST request header
     client.println("POST " + serverPath + " HTTP/1.1");
-    client.println("Host: " + serverName + ":" + String(serverPort));  // Include port in Host header if non-standard
+    client.println("Host: " + serverName + ":" + String(serverPort));
     client.println("Content-Length: " + String(totalLen));
     client.println("Content-Type: multipart/form-data; boundary=RandomNerdTutorials");
-    client.println("Connection: close");  // Advise server to close connection after response
-    client.println();                     // End of headers
-
-    // Send multipart boundary and headers for the image file
+    client.println("Connection: close");
+    client.println();
     client.print(head);
 
-    // Send image data in chunks
+    Serial.println("Sending image data...");
+    FastLED.setBrightness(BRIGHTNESS);
+    led_set_color(CRGB::Orange); 
+
     uint8_t* fbBuf = fb->buf;
     size_t fbLen = fb->len;
-    size_t chunksize = 1024;  // Send in 1KB chunks
+    size_t chunksize = 1024;
     for (size_t n = 0; n < fbLen; n = n + chunksize) {
       if (n + chunksize < fbLen) {
         client.write(fbBuf, chunksize);
@@ -214,68 +291,55 @@ String sendPhoto() {
         client.write(fbBuf, remainder);
       }
     }
-    // Send the final multipart boundary
     client.print(tail);
-
-    // Return the frame buffer to be reused
     esp_camera_fb_return(fb);
-    fb = NULL;  // Make sure we don't return it again if something goes wrong below
+    fb = NULL;
 
     Serial.println("Image data sent. Waiting for server response...");
+    FastLED.setBrightness(BRIGHTNESS);
+    led_set_color(CRGB::SkyBlue); 
 
-    // Read the response from the server
-    int timoutTimer = 10000;  // 10 seconds timeout
+    int timoutTimer = 10000;
     long startTimer = millis();
-    boolean state = false;  // Flag to indicate if we are reading the body
+    boolean http_state = false; // Renamed to avoid conflict with a potential global 'state'
+    getAll = ""; 
+    getBody = ""; 
 
     while ((startTimer + timoutTimer) > millis()) {
-      // Serial.print("."); // Optional: print dots while waiting
-      // delay(100); // Be careful with delays inside loops like this
-
       while (client.available()) {
         char c = client.read();
-        //Serial.print(c); // Uncomment for debugging full response
-
-        // Simple logic to capture the response body after the first empty line
         if (c == '\n') {
-          if (getAll.length() == 0) {  // Indicates end of headers (blank line)
-            state = true;
-          }
-          getAll = "";  // Reset line buffer
+          if (getAll.length() == 0) { http_state = true; }
+          getAll = "";
         } else if (c != '\r') {
-          getAll += String(c);  // Build the current line
+          getAll += String(c);
         }
-
-        if (state == true) {  // If we are in the body part
-          getBody += String(c);
-        }
-        startTimer = millis();  // Reset timeout timer with every byte received
+        if (http_state == true) { getBody += String(c); }
+        startTimer = millis(); 
       }
-      if (getBody.length() > 0) {
-        // Check if client is still connected, break if not
-        if (!client.connected() && !client.available()) {
-          break;
-        }
+      if (getBody.length() > 0 && (!client.connected() && !client.available())) {
+        break;
       }
-      // Add small delay to prevent tight loop hogging CPU if client.available() is false
-      delay(1);
+      delay(1); 
     }
-    Serial.println();  // Newline after waiting dots or response printing
+    Serial.println(); 
 
     if (getBody.length() > 0) {
       Serial.println("Server Response Body:");
       Serial.println(getBody);
+      // LED (SkyBlue) will be changed by handleServerResponse or loop returning to READY_COLOR
     } else {
       Serial.println("No response body received or timeout.");
-      getBody = "Server Response Timeout";
+      getBody = "Error: Server Response Timeout"; 
+      led_show_status_temp(CRGB::DarkRed, 2000); 
     }
-
-    client.stop();  // Close the connection
+    client.stop();
     Serial.println("Connection closed.");
   } else {
-    getBody = "Connection to " + serverName + " failed.";
+    getBody = "Error: Connection to " + serverName + " failed.";
     Serial.println(getBody);
-    if (fb) {  // Make sure to return buffer even if connection failed after capture
+    led_show_status_temp(CRGB::Red, 2000); 
+    if (fb) { 
       esp_camera_fb_return(fb);
       fb = NULL;
     }
@@ -285,16 +349,29 @@ String sendPhoto() {
 
 void handleServerResponse(String responseBody) {
   Serial.println("\n--- Handling Server Response ---");
-  // First, check if the response body indicates an error from sendPhoto itself
-  if (responseBody.startsWith("Error:")) {
-    Serial.println("Received error message from sendPhoto function:");
+  FastLED.setBrightness(BRIGHTNESS); // Ensure brightness
+
+  if (responseBody.startsWith("Error: Server Response Timeout") ||
+      responseBody.startsWith("Error: Connection to ") ||
+      responseBody.startsWith("Error: Camera capture failed") // Added this just in case restart fails
+      ) {
+    Serial.println("Error reported by sendPhoto, LED status already handled (likely shown error color then off):");
     Serial.println(responseBody);
     Serial.println("--- End Handling ---");
-    return;  // Don't attempt to parse if it's a known error string
+    // Main loop will set READY_COLOR next
+    return; 
   }
 
-  // If it's not a known error, assume it might be JSON and try parsing
+  if (responseBody.startsWith("Error:")) {
+    Serial.println("Generic or unexpected error string prefixed with 'Error:' received:");
+    Serial.println(responseBody);
+    led_show_status_temp(CRGB::Magenta, 2500); 
+    Serial.println("--- End Handling ---");
+    return;
+  }
+
   Serial.println("Attempting to parse JSON response...");
+  led_set_color(CRGB::Teal); 
 
   StaticJsonDocument<JSON_DOC_SIZE> doc;
   DeserializationError error = deserializeJson(doc, responseBody);
@@ -303,15 +380,15 @@ void handleServerResponse(String responseBody) {
     Serial.print(F("deserializeJson() failed: "));
     Serial.println(error.c_str());
     Serial.println("Raw response was:");
-    Serial.println(responseBody);  // Print the body that failed parsing
+    Serial.println(responseBody);
+    led_show_status_temp(CRGB::Red, 3000); 
     Serial.println("--- End Handling ---");
-    return;  // Exit if parsing failed
+    return;
   }
 
-  // --- JSON Parsing Successful ---
   Serial.println("JSON Parsing Successful!");
+  led_show_status_temp(CRGB::Green, 1500); // Green for 1.5s, then off. Loop will set READY_COLOR.
 
-  // Extract data - use .isNull() or default values for safety
   bool success = doc["success"] | false;
   const char* recognition_result = doc["recognition_result"] | "unknown";
   const char* message = doc["message"] | "";
@@ -322,7 +399,6 @@ void handleServerResponse(String responseBody) {
   Serial.printf("Message: %s\n", message);
   Serial.printf("Timestamp: %s\n", timestamp);
 
-  // Extract nested 'person' object
   if (doc.containsKey("person") && !doc["person"].isNull()) {
     JsonObject person = doc["person"];
     const char* person_id = person["id"] | "N/A";
@@ -337,23 +413,26 @@ void handleServerResponse(String responseBody) {
     Serial.println("Person details not found in response.");
   }
 
-  // Extract 'actions' array
-  if (doc.containsKey("actions") && doc["actions"].is<JsonArray>()) {  // Check it's an array
+  if (doc.containsKey("actions") && doc["actions"].is<JsonArray>()) {
     JsonArray actions = doc["actions"].as<JsonArray>();
-    if (!actions.isNull() && actions.size() > 0) {  // Check not null and not empty
+    if (!actions.isNull() && actions.size() > 0) {
       Serial.println("Actions:");
       for (JsonObject action_item : actions) {
         const char* lock_id = action_item["lock_id"] | "N/A";
         const char* action_cmd = action_item["action"] | "N/A";
-        int duration = action_item["duration"] | 0;
+        int duration = action_item["duration"] | 0; 
 
         Serial.printf("  Lock ID: %s, Action: %s, Duration: %d\n", lock_id, action_cmd, duration);
 
         if(strcmp(action_cmd, "N/A") == 0 || strcmp(lock_id, "N/A") == 0) {
           Serial.println("Skipping unlock::No 'lock_id' or 'action'");
-          return;
+          led_show_status_temp(CRGB::Orange, 1500); 
+        } else if (strcmp(action_cmd, "unlock") == 0) { 
+          unlock(lock_id); 
+        } else {
+          Serial.println("Unknown action command: " + String(action_cmd));
+          led_show_status_temp(CRGB::Yellow, 1500); 
         }
-        unlock(lock_id);
       }
     } else {
       Serial.println("Actions array is present but empty or null.");
@@ -367,30 +446,47 @@ void handleServerResponse(String responseBody) {
 
 void unlock(const char* lock_id) {
   Serial.println("  -> Entered unlock block");
+  FastLED.setBrightness(BRIGHTNESS); // Ensure brightness
+  bool unlocked_something = false;
+  CRGB unlock_color = CRGB::Purple; 
+
   if (strcmp(lock_id, "lock_001") == 0) {
     Serial.println("  -> Action unlocking: (ID: lock_001)");
-    digitalWrite(RELAY_PIN_1, LOW);
+    digitalWrite(RELAY_PIN_1, LOW); 
+    unlocked_something = true;
   }
   else if (strcmp(lock_id, "lock_002") == 0) {
     Serial.println("  -> Action unlocking: (ID: lock_002)");
-    digitalWrite(RELAY_PIN_2, LOW);
+    digitalWrite(RELAY_PIN_2, LOW); 
+    unlocked_something = true;
   }
   else if (strcmp(lock_id, "lock_003") == 0) {
     Serial.println("  -> Action unlocking: (ID: lock_003)");
-    digitalWrite(RELAY_PIN_3, LOW);
+    digitalWrite(RELAY_PIN_3, LOW); 
+    unlocked_something = true;
   }
-  else if (strcmp(lock_id, "lock_004") == 0) {
-    Serial.println("  -> Action unlocking: (ID: lock_004)");
-  } else {
+  else {
     Serial.println("  -> Invalid lock_id: " + String(lock_id));
+    led_show_status_temp(CRGB::Gold, 1500); 
+    return; 
   }
   
-  delay(3000);
+  if (unlocked_something) {
+    led_set_color(unlock_color); 
+    Serial.printf("  -> Relay(s) for %s activated, LED %s\n", lock_id, "Purple");
+  }
   
-  digitalWrite(RELAY_PIN_1, HIGH); // Relay OFF
-  digitalWrite(RELAY_PIN_2, HIGH); // Relay OFF
-  digitalWrite(RELAY_PIN_3, HIGH); // Relay OFF
+  delay(3000); 
   
-  Serial.println("  -> Locked again");
-  delay(100);
+  digitalWrite(RELAY_PIN_1, HIGH); 
+  digitalWrite(RELAY_PIN_2, HIGH); 
+  digitalWrite(RELAY_PIN_3, HIGH); 
+  
+  if (unlocked_something) {
+    Serial.println("  -> Locked again (Relays OFF)");
+    led_show_status_temp(CRGB::DarkCyan, 500); // Then off. Loop will set READY_COLOR.
+  } else {
+    led_off(); // Should not be reached if invalid IDs return, but good practice.
+  }
+  delay(100); 
 }
